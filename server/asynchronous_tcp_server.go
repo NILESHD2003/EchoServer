@@ -6,9 +6,10 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"sync/atomic"
 )
 
-func handleClientConnection(c net.Conn, concurrent_clients *int) {
+func handleClientConnection(c net.Conn, concurrent_clients *int64) {
 	defer c.Close()
 
 	// Infinite loop to handle client connection and echo back messages i.e. accept messages from client and send back the same message to client
@@ -16,20 +17,31 @@ func handleClientConnection(c net.Conn, concurrent_clients *int) {
 		cmd, err := readIncomingCommand(c)
 
 		if err != nil {
-			*concurrent_clients -= 1
+			atomic.AddInt64(concurrent_clients, -1)
 
-			log.Println("[Asynchronous]Client Disconnected: ", c.RemoteAddr(), " | Total Clients: ", *concurrent_clients)
-			if err == io.EOF {
-				return
+			log.Println(
+				"[Asynchronous]Client Disconnected:",
+				c.RemoteAddr(),
+				"| Total Clients:",
+				atomic.LoadInt64(concurrent_clients),
+			)
+
+			if err != io.EOF {
+				log.Println(
+					"[Asynchronous]Error Reading Command from Client:",
+					err,
+				)
 			}
-			log.Println("[Asynchronous]Error Reading Command from Client: ", err)
+
+			return
 		}
+
 		log.Println("[Asynchronous]Received Command from Client: ", cmd)
 
 		if err := respondToClient(c, cmd); err != nil {
 			log.Println("[Asynchronous]Error Responding to Client: ", err)
-			*concurrent_clients -= 1
-			log.Println("[Asynchronous]Client Disconnected: ", c.RemoteAddr(), " | Total Clients: ", *concurrent_clients)
+			atomic.AddInt64(concurrent_clients, -1)
+			log.Println("[Asynchronous]Client Disconnected: ", c.RemoteAddr(), " | Total Clients: ", atomic.LoadInt64(concurrent_clients))
 			return
 		}
 	}
@@ -38,7 +50,7 @@ func handleClientConnection(c net.Conn, concurrent_clients *int) {
 func RunAsynchronousTCPServer(config config.Config) {
 	log.Println("[Asynchronous]Starting Asynchronous TCP Server on ", config.Host, ":", config.Port)
 
-	var concurrent_clients int = 0
+	var concurrent_clients int64 = 0
 
 	lsnr, err := net.Listen("tcp", config.Host+":"+strconv.Itoa(config.Port))
 
@@ -56,8 +68,8 @@ func RunAsynchronousTCPServer(config config.Config) {
 			continue
 		}
 
-		concurrent_clients += 1
-		log.Println("[Asynchronous]New Client Connected: ", c.RemoteAddr(), " | Total Clients: ", concurrent_clients)
+		atomic.AddInt64(&concurrent_clients, 1)
+		log.Println("[Asynchronous]New Client Connected: ", c.RemoteAddr(), " | Total Clients: ", atomic.LoadInt64(&concurrent_clients))
 
 		// spawing a new goroutine to handle the client connection and echo back messages i.e. accept messages from client and send back the same message to client
 		go handleClientConnection(c, &concurrent_clients)
